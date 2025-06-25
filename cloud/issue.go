@@ -521,7 +521,6 @@ type SearchOptions struct {
 	Fields          []string `json:"fields,omitempty"`          // List of fields to return (e.g. ["summary","status"])
 	FieldsByKeys    bool     `json:"fieldsByKeys,omitempty"`    // Whether the 'fields' slice is keyed by field name rather than ID
 	FailFast        bool     `json:"failFast,omitempty"`        // Whether to stop on the first error
-	JQL             string   `json:"jql,omitempty"`             // The JQL query string
 	MaxResults      int      `json:"maxResults,omitempty"`      // Maximum number of issues to return
 	NextPageToken   string   `json:"nextPageToken,omitempty"`   // Token for pagination (replaces startAt in enhanced search)
 	Properties      []string `json:"properties,omitempty"`      // Additional issue properties to include
