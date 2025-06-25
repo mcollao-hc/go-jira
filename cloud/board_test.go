@@ -54,7 +54,6 @@ func TestBoardService_GetAllBoards_WithFilter(t *testing.T) {
 		Name:           "Test",
 		ProjectKeyOrID: "TE",
 	}
-	boardsListOptions.StartAt = 1
 	boardsListOptions.MaxResults = 10
 
 	projects, _, err := testClient.Board.GetAllBoards(context.Background(), boardsListOptions)

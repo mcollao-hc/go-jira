@@ -475,9 +475,9 @@ type Comment struct {
 	ID           string            `json:"id,omitempty" structs:"id,omitempty"`
 	Self         string            `json:"self,omitempty" structs:"self,omitempty"`
 	Name         string            `json:"name,omitempty" structs:"name,omitempty"`
-	Author       *User              `json:"author,omitempty" structs:"author,omitempty"`
+	Author       *User             `json:"author,omitempty" structs:"author,omitempty"`
 	Body         string            `json:"body,omitempty" structs:"body,omitempty"`
-	UpdateAuthor *User              `json:"updateAuthor,omitempty" structs:"updateAuthor,omitempty"`
+	UpdateAuthor *User             `json:"updateAuthor,omitempty" structs:"updateAuthor,omitempty"`
 	Updated      string            `json:"updated,omitempty" structs:"updated,omitempty"`
 	Created      string            `json:"created,omitempty" structs:"created,omitempty"`
 	Visibility   CommentVisibility `json:"visibility,omitempty" structs:"visibility,omitempty"`
@@ -515,26 +515,26 @@ type CommentVisibility struct {
 // Pagination is used for the Jira REST APIs to conserve server resources and limit
 // response size for resources that return potentially large collection of items.
 // A request to a pages API will result in a values array wrapped in a JSON object with some paging metadata
-// Default Pagination options
+// https://developer.atlassian.com/cloud/jira/platform/rest/v2/api-group-issue-search/#api-rest-api-2-search-jql-post
 type SearchOptions struct {
-	// StartAt: The starting index of the returned projects. Base index: 0.
-	StartAt int `url:"startAt,omitempty"`
-	// MaxResults: The maximum number of projects to return per page. Default: 50.
-	MaxResults int `url:"maxResults,omitempty"`
-	// Expand: Expand specific sections in the returned issues
-	Expand string `url:"expand,omitempty"`
-	Fields []string
-	// ValidateQuery: The validateQuery param offers control over whether to validate and how strictly to treat the validation. Default: strict.
-	ValidateQuery string `url:"validateQuery,omitempty"`
+	Expand          string   `url:"expand,omitempty"`           // Which parts of the issue to expand (e.g. names, schema, operations)
+	Fields          []string `json:"fields,omitempty"`          // List of fields to return (e.g. ["summary","status"])
+	FieldsByKeys    bool     `json:"fieldsByKeys,omitempty"`    // Whether the 'fields' slice is keyed by field name rather than ID
+	FailFast        bool     `json:"failFast,omitempty"`        // Whether to stop on the first error
+	JQL             string   `json:"jql,omitempty"`             // The JQL query string
+	MaxResults      int      `json:"maxResults,omitempty"`      // Maximum number of issues to return
+	NextPageToken   string   `json:"nextPageToken,omitempty"`   // Token for pagination (replaces startAt in enhanced search)
+	Properties      []string `json:"properties,omitempty"`      // Additional issue properties to include
+	ReconcileIssues []int    `json:"reconcileIssues,omitempty"` // Issue IDs used for result reconciliation
 }
 
 // searchResult is only a small wrapper around the Search (with JQL) method
 // to be able to parse the results
 type searchResult struct {
-	Issues     []Issue `json:"issues" structs:"issues"`
-	StartAt    int     `json:"startAt" structs:"startAt"`
-	MaxResults int     `json:"maxResults" structs:"maxResults"`
-	Total      int     `json:"total" structs:"total"`
+	Issues        []Issue `json:"issues" structs:"issues"`
+	IsLast        bool    `json:"isLast" structs:"isLast"`
+	NextPageToken string  `json:"nextPageToken" structs:"nextPageToken"`
+	Total         int     `json:"total" structs:"total"`
 }
 
 // GetQueryOptions specifies the optional parameters for the Get Issue methods
@@ -1046,7 +1046,7 @@ func (s *IssueService) AddLink(ctx context.Context, issueLink *IssueLink) (*Resp
 // This double check effort is done for v2 - Remove this two lines if this is completed.
 func (s *IssueService) Search(ctx context.Context, jql string, options *SearchOptions) ([]Issue, *Response, error) {
 	u := url.URL{
-		Path: "rest/api/2/search",
+		Path: "rest/api/2/search/jql",
 	}
 	uv := url.Values{}
 	if jql != "" {
@@ -1054,8 +1054,8 @@ func (s *IssueService) Search(ctx context.Context, jql string, options *SearchOp
 	}
 
 	if options != nil {
-		if options.StartAt != 0 {
-			uv.Add("startAt", strconv.Itoa(options.StartAt))
+		if options.NextPageToken != "" {
+			uv.Add("nextPageToken", options.NextPageToken)
 		}
 		if options.MaxResults != 0 {
 			uv.Add("maxResults", strconv.Itoa(options.MaxResults))
@@ -1066,9 +1066,24 @@ func (s *IssueService) Search(ctx context.Context, jql string, options *SearchOp
 		if strings.Join(options.Fields, ",") != "" {
 			uv.Add("fields", strings.Join(options.Fields, ","))
 		}
-		if options.ValidateQuery != "" {
-			uv.Add("validateQuery", options.ValidateQuery)
+		if options.FieldsByKeys {
+			uv.Add("fieldsByKeys", strconv.FormatBool(options.FieldsByKeys))
 		}
+		if options.FailFast {
+			uv.Add("failFast", strconv.FormatBool(options.FailFast))
+		}
+		if len(options.Properties) > 5 {
+			return nil, nil, fmt.Errorf("search option properties accepts maximum five entries")
+		}
+		if strings.Join(options.Properties, ",") != "" {
+			uv.Add("properties", strings.Join(options.Properties, ","))
+		}
+		if options.ReconcileIssues != nil {
+			for _, id := range options.ReconcileIssues {
+				uv.Add("reconcileIssues", strconv.Itoa(id))
+			}
+		}
+
 	}
 
 	u.RawQuery = uv.Encode()
@@ -1095,7 +1110,6 @@ func (s *IssueService) Search(ctx context.Context, jql string, options *SearchOp
 func (s *IssueService) SearchPages(ctx context.Context, jql string, options *SearchOptions, f func(Issue) error) error {
 	if options == nil {
 		options = &SearchOptions{
-			StartAt:    0,
 			MaxResults: 50,
 		}
 	}
@@ -1121,16 +1135,18 @@ func (s *IssueService) SearchPages(ctx context.Context, jql string, options *Sea
 			}
 		}
 
-		if resp.StartAt+resp.MaxResults >= resp.Total {
-			return nil
+		if resp.IsLast {
+			break
 		}
 
-		options.StartAt += resp.MaxResults
+		options.NextPageToken += resp.NextPageToken
 		issues, resp, err = s.Search(ctx, jql, options)
 		if err != nil {
 			return err
 		}
 	}
+
+	return nil
 }
 
 // GetCustomFields returns a map of customfield_* keys with string values
